@@ -1,0 +1,141 @@
+'Get SQL VERSION
+        Dim strSQL As String = "use " & cmbbDatabasesDB.Text & " SELECT @@VERSION as ver"
+
+ 'OP Version
+        strSQL = "use " & cmbbDatabasesDB.Text & " Select Update_Version from sysfile"
+
+'Get DB name from SQL - Logical name physical name and Sizes both MDF and LDF
+strSQL = "SELECT DB_NAME(database_id) AS DBName,Name AS Logical_Name, Physical_Name,(size*8)/1024 SizeMB
+        FROM sys.master_files
+        WHERE DB_NAME(database_id) = '" & cmbbDatabasesDB.Text & "' --databasename"
+
+'Get DatabaseName	LastBackupFileName	LastBackupDatetime	backup_size	compressed_backup_size
+        strSQL = "select * from (
+SELECT  DatabaseName = x.database_name,
+        LastBackupFileName = x.physical_device_name,
+        LastBackupDatetime = x.backup_start_date, backup_size = x.backup_size / 1000 /1000, compressed_backup_size = x.compressed_backup_size / 1000 /1000
+FROM (  SELECT  bs.backup_size, bs.compressed_backup_size, bs.database_name,
+                bs.backup_start_date,
+                bmf.physical_device_name,
+                  Ordinal = ROW_NUMBER() OVER( PARTITION BY bs.database_name ORDER BY bs.backup_start_date DESC )
+          FROM  msdb.dbo.backupmediafamily bmf
+                  JOIN msdb.dbo.backupmediaset bms ON bmf.media_set_id = bms.media_set_id
+                  JOIN msdb.dbo.backupset bs ON bms.media_set_id = bs.media_set_id
+          WHERE   bs.[type] = 'D'
+                  AND bs.is_copy_only = 0 ) x 
+--WHERE x.Ordinal = 1
+where database_name = '" + cmbbDatabasesDB.Text + "' and physical_device_name like '%:\%') t1 where LastBackupDatetime = (select max(lastBackupDatetime) from (
+SELECT  
+        max(backup_start_date) as lastBackupDatetime
+FROM (  SELECT  bs.backup_size, bs.compressed_backup_size, bs.database_name,
+                bs.backup_start_date,
+                bmf.physical_device_name,
+                  Ordinal = ROW_NUMBER() OVER( PARTITION BY bs.database_name ORDER BY bs.backup_start_date DESC )
+          FROM  msdb.dbo.backupmediafamily bmf
+                  JOIN msdb.dbo.backupmediaset bms ON bmf.media_set_id = bms.media_set_id
+                  JOIN msdb.dbo.backupset bs ON bms.media_set_id = bs.media_set_id
+          WHERE   bs.[type] = 'D'
+                  AND bs.is_copy_only = 0 ) x 
+--WHERE x.Ordinal = 1
+where database_name = '" + cmbbDatabasesDB.Text + "' and physical_device_name like '%:\%')t2)"
+
+'Get Drive Logical Name - Drive Letter - Free Space GB - % Free
+ strSQL = "SELECT DISTINCT dovs.logical_volume_name AS LogicalName,
+dovs.volume_mount_point AS Drive,
+CONVERT(INT,dovs.available_bytes/1000.0) / 1000 / 1000 AS FreeSpaceInGB, PercentFree = CAST(dovs.available_bytes as float)/dovs.total_bytes * 100
+FROM sys.master_files mf
+CROSS APPLY sys.dm_os_volume_stats(mf.database_id, mf.FILE_ID) dovs
+ORDER BY FreeSpaceInGB ASC"
+
+'Get SQL Default Backup Folder
+EXEC  master.dbo.xp_instance_regread  
+ N'HKEY_LOCAL_MACHINE', N'Software\Microsoft\MSSQLServer\MSSQLServer',N'BackupDirectory'
+
+ 'Get SQL Default Log File Folder
+ EXEC  master.dbo.xp_instance_regread  
+ N'HKEY_LOCAL_MACHINE', N'Software\Microsoft\MSSQLServer\MSSQLServer',N'DefaultLog'
+
+ 'Get SQL Default Data Folder
+EXEC  master.dbo.xp_instance_regread  
+ N'HKEY_LOCAL_MACHINE', N'Software\Microsoft\MSSQLServer\MSSQLServer',N'DefaultData'
+
+ 'Check if compression is possible - 0 means compression avaliable, 1 Means Yes, -1 means no
+ SELECT ISNULL((SELECT value FROM sys.configurations WHERE name = 'backup compression default'),-1) as test
+
+ 'Get Drives and MB Free Space
+ strSQL As String = "EXEC MASTER..xp_fixeddrives"
+
+ 'Get Windows Version
+ strSQL = "        EXEC xp_instance_regread
+        'HKEY_LOCAL_MACHINE',
+        'SOFTWARE\Microsoft\Windows NT\CurrentVersion',
+        'ProductName';"
+
+'Get Windows Service Pack Version
+strSQL = "SELECT windows_service_pack_level as data  
+FROM sys.dm_os_windows_info;  "
+
+'Get Windows Folder
+strSQL = " EXEC xp_instance_regread
+'HKEY_LOCAL_MACHINE',
+'SOFTWARE\Microsoft\Windows NT\CurrentVersion',
+'SystemRoot'; "
+
+'Get-- Scritp to get Processor Info from Registry
+strSQL = " -- Scritp to get Processor Info from Registry
+EXEC xp_instance_regread
+'HKEY_LOCAL_MACHINE',
+'HARDWARE\DESCRIPTION\System\CentralProcessor\0',
+'ProcessorNameString';"
+
+'Get Processor MHZ
+strSQL = "EXEC xp_instance_regread
+'HKEY_LOCAL_MACHINE',
+'HARDWARE\DESCRIPTION\System\CentralProcessor\0',
+'~Mhz';"
+
+'Get Logical Processors - Physical Processors - RamGB - SQL Start Time
+ strSQL = "SELECT  cpu_count AS [LCPU] ,cpu_count/hyperthread_ratio AS [PCPU] ,physical_memory_kb/1000/1000 AS [RAMGB], sqlserver_start_time FROM sys.dm_os_sys_info OPTION (RECOMPILE);"
+
+
+ 'Get DB SPID - Login - Hostname - Command - LastBatch - Program Name - running or finished
+ Dim strSQL As String = "SELECT spid,
+        --sp.[status],
+        loginame [Login],
+        hostname, 
+        --blocked BlkBy,
+        --sd.name DBName, 
+        cmd Command,
+        --cpu CPUTime,
+        --physical_io DiskIO,
+        last_batch LastBatch,
+        [program_name] ProgramName,
+		open_tran running_Or_Finished
+		--sd.filename,
+		--sd.crdate
+		  
+FROM master.dbo.sysprocesses sp 
+JOIN master.dbo.sysdatabases sd ON sp.dbid = sd.dbid
+where sd.name = '" + cmbbDatabasesDB.Text + "'
+ORDER BY spid "
+
+'Confirm if destination folder exists
+strSQL = "DECLARE @BackupDestination nvarchar(500) = N'" + BackupPath + "'; DECLARE @DirectoryExists int; EXEC master.dbo.xp_fileexist @BackupDestination, @DirectoryExists OUT; IF @DirectoryExists = 0 EXEC master.sys.xp_create_subdir @BackupDestination"
+
+'Backup query with compression
+strSQL = "USE " + cmbbDatabasesDB.Text + " BACKUP DATABASE " + cmbbDatabasesDB.Text + " TO DISK = '" + dbbackuppathname + "' WITH COMPRESSION "
+
+
+'Backup query without compression
+strSQL = "USE " + cmbbDatabasesDB.Text + " BACKUP DATABASE " + cmbbDatabasesDB.Text + " TO DISK = '" + dbbackuppathname + "'"
+
+'Verify Backup
+strSQL = "RESTORE VERIFYONLY FROM DISK = '" + dbbackuppathname + "' "
+
+
+-- use these for permission issues
+sys.dm_os_windows_info
+
+sys.dm_os_sys_info
+
+sys.dm_os_sys_memory
